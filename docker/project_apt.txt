@@ -1,0 +1,4 @@
+# --- System packages the research project adds (Layers 4–5 extension point) (DOCKER.md §2) ---
+# libudunits2-dev   # e.g. units (used by sf)
+# libgdal-dev       # e.g. sf
+# libmagick++-dev   # e.g. magick

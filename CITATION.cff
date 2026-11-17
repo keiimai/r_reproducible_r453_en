@@ -1,0 +1,20 @@
+# --- Citation information (LAYERS.md "Relationship with derived projects") ---
+
+cff-version: 1.2.0
+title: "R 4.5.3 analysis environment"
+message: "If you publish results obtained with this environment, please cite it using the information below."
+type: software
+authors:
+  - family-names: "Imai"
+    given-names: "Kei"
+    email: "keiimai1220@gmail.com"
+    affiliation: "The University of Tokyo, Japan"
+abstract: >-
+  A runtime environment template for reproducible analysis (Docker and renv).
+  It provides only the recording layer, which keeps for each run the run_id, the SHA-256 of the files read, the git commit, a snapshot of the runtime environment, the resolved config, and a ledger of all runs. The analysis itself is written on top of this layer in each project, and no analysis code is bundled.
+license: MIT
+version: 0.1.0
+date-released: "2026-11-17"
+keywords:
+  - reproducible research
+  - R

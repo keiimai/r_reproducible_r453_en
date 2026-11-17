@@ -1,0 +1,124 @@
+# --- Checks GitHub runs when the maintainer starts them by hand (WORKSPACE.md §4) ---
+name: CI
+
+# --- When it runs (only when started by hand; not on push or PR) (WORKSPACE.md §4) ---
+on:
+  workflow_dispatch:
+    inputs:
+      docker:
+        description: "Also build the Docker image (when the image inputs changed)"
+        type: boolean
+        default: false
+
+# --- Cancel earlier runs on the same branch (WORKSPACE.md §4) ---
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# --- Values fixed before R starts, and the date of the dependency source (WORKSPACE.md §4) ---
+env:
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  LANG: "C.UTF-8"
+  LC_ALL: "C.UTF-8"
+  P3M_SNAPSHOT: "2026-04-01"
+
+# --- Jobs (WORKSPACE.md §4) ---
+jobs:
+  # --- Tests, pre-commit checks and the recording-layer path in one job (WORKSPACE.md §4) ---
+  checks:
+    name: Tests, pre-commit checks, recording-layer path
+    runs-on: ubuntu-24.04
+    steps:
+      # --- Check out the repository (WORKSPACE.md §4) ---
+      - uses: actions/checkout@v7
+      # --- Install the same R version as the image (WORKSPACE.md §4) ---
+      - uses: r-lib/actions/setup-r@v2
+        id: setup-r
+        with:
+          r-version: "4.5.3"
+          use-public-rspm: false
+      # --- Install only yaml and jsonlite, which the checks need, and run the hook on all files (WORKSPACE.md §4) ---
+      - name: Run the pre-commit checks on all files
+        run: |
+          Rscript -e "source('docker/p3m_repo.R'); cat('[p3m]', use_p3m(Sys.getenv('P3M_SNAPSHOT')), '\n'); install.packages(c('yaml', 'jsonlite'), lib = Sys.getenv('R_LIBS_USER'))"
+          bash .githooks/pre-commit --all
+      # --- Does renv.lock disagree with DESCRIPTION? (same as make lock-check) (WORKSPACE.md §4) ---
+      - name: Does renv.lock disagree with DESCRIPTION?
+        if: ${{ !cancelled() && steps.setup-r.outcome == 'success' }}
+        run: Rscript --vanilla tools/make_lockfile.R --check
+      # --- Install dependencies from renv.lock (same steps as the Docker image) (WORKSPACE.md §4) ---
+      - name: Install dependencies from renv.lock (same steps as the Docker image)
+        id: deps
+        if: ${{ !cancelled() && steps.setup-r.outcome == 'success' }}
+        run: |
+          packages="$(sed -e 's/#.*//' docker/project_apt.txt | xargs)"
+          if [ -n "$packages" ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends $packages
+          fi
+          Rscript -e "source('docker/p3m_repo.R'); cat('[p3m]', use_p3m(Sys.getenv('P3M_SNAPSHOT')), '\n'); install.packages('renv', lib = Sys.getenv('R_LIBS_USER')); renv::restore(lockfile = 'renv.lock', library = Sys.getenv('R_LIBS_USER'), prompt = FALSE)"
+      # --- lint (same as make lint) (WORKSPACE.md §4) ---
+      - name: lint
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: Rscript -e 'lints <- structure(c(lintr::lint_package(), lintr::lint_dir("tools"), lintr::lint_dir("docker"), lintr::lint_dir("notebooks")), class = "lints"); print(lints); if (length(lints) > 0) quit(status = 1)'
+      # --- Can every config file be read? (WORKSPACE.md §4) ---
+      - name: Can every config file be read?
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: |
+          Rscript -e '
+            for (path in list.files("R", pattern = "[.][Rr]$", full.names = TRUE)) source(path)
+            for (f in list.files("configs/experiment", pattern="[.]yaml$", recursive=TRUE, full.names=TRUE)) {
+              cfg <- repro_config_load(f); cat("ok:", f, "\n")
+            }'
+      # --- Tests (same as make test) (WORKSPACE.md §4) ---
+      - name: Tests
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: Rscript -e 'testthat::test_dir("tests/testthat", reporter = "summary", stop_on_failure = TRUE)'
+      # --- Run once through the recording layer (same as make smoke) (WORKSPACE.md §4) ---
+      - name: Run once through the recording layer (smoke test)
+        id: smoke
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: Rscript -e 'source("R/repro.R"); repro_smoke()'
+      # --- Rebuild and show the run ledger (same as make runs) (WORKSPACE.md §4) ---
+      - name: Rebuild and show the run ledger (can the records be read?)
+        if: ${{ !cancelled() && steps.smoke.outcome == 'success' }}
+        run: Rscript -e 'source("R/repro.R"); repro_runs(show = TRUE)'
+      # --- Keep the record JSON for 14 days (WORKSPACE.md §4) ---
+      - name: Save the run records
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: repro-records
+          path: outputs/repro/
+          retention-days: 14
+
+  # --- Docker image build and load check (only when docker is selected) (WORKSPACE.md §4) ---
+  docker:
+    name: Does the Docker image build and pass the load check?
+    if: ${{ inputs.docker }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      # --- Check out the repository (WORKSPACE.md §4) ---
+      - uses: actions/checkout@v7
+      # --- Build tooling (can keep the cache on GitHub) (WORKSPACE.md §4) ---
+      - uses: docker/setup-buildx-action@v4
+      # --- Read the image name from name: in docker-compose.yml (the same as make build) (WORKSPACE.md §4) ---
+      - name: Read the image name
+        id: name
+        run: |
+          echo "image=$(sed -n 's/^name: //p' docker-compose.yml)" >> "$GITHUB_OUTPUT"
+      # --- Build with the same stage and build arguments as make build without a shared base (WORKSPACE.md §4) ---
+      - name: Build (smoke_load.R runs inside the image)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: dev
+          push: false
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            IMAGE_NAME=${{ steps.name.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

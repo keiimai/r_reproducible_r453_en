@@ -1,0 +1,10 @@
+# --- Only what the build needs goes into the image (DOCKER.md §1) ---
+*
+!DESCRIPTION
+!renv.lock
+!R/*.[Rr]
+!docker/*.R
+!docker/project_apt.txt
+!docker/project_build.sh
+
+# --- Lines the project adds (Layers 4–5 extension point) (LAYERS.md "Extension points for Layers 4–5") ---

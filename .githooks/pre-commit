@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# --- Pre-commit checks (WORKSPACE.md §3) ---
+
+# --- Stop on undefined variables, and make a failure inside a pipe fail the pipe (WORKSPACE.md §3) ---
+set -uo pipefail
+
+# --- Do not commit inside the container (WORKSPACE.md §3) ---
+if [ -f /opt/build-info.json ]; then
+  printf '\033[31m[pre-commit]\033[0m %s\n' "You are trying to commit inside the container. Commit on the host (for example, the PC's terminal)." >&2
+  exit 1
+fi
+
+# --- Move to the repository root (WORKSPACE.md §3) ---
+root="$(git rev-parse --show-toplevel)" || exit 1
+cd "$root" || exit 1
+
+# --- Check the staged files, or all tracked files (--all) (WORKSPACE.md §3) ---
+mode=staged
+[ "${1:-}" = "--all" ] && mode=all
+
+# --- Collect problems (keeping apart the case where Docker cannot run the R checks) and stop once at the end (WORKSPACE.md §3) ---
+fail=0
+docker_ng=0
+ng() { printf '\033[31m[pre-commit]\033[0m %s\n' "$1" >&2; fail=1; }
+ng_docker() { printf '\033[31m[pre-commit]\033[0m %s\n' "$1" >&2; docker_ng=1; }
+finish() {
+  if [ "$fail" -ne 0 ]; then
+    [ "$mode" = all ] && echo "[pre-commit] Tracked files have problems. Fix them as described above." >&2 \
+      || echo "[pre-commit] Commit stopped. Fix the problems above, git add, then commit again." >&2
+  fi
+  if [ "$docker_ng" -ne 0 ]; then
+    echo "[pre-commit] Could not run the R checks in Docker. Do as described above, then run again." >&2
+  fi
+  [ "$fail" -eq 0 ] && [ "$docker_ng" -eq 0 ] || exit 1
+  exit 0
+}
+
+# --- 1. Whether renv.lock is in the commit (WORKSPACE.md §3) ---
+if ! git ls-files --error-unmatch renv.lock >/dev/null 2>&1; then
+  ng "renv.lock is not in the commit. After make lock, run git add renv.lock."
+fi
+
+# --- List of files to check (WORKSPACE.md §3) ---
+files=()
+if [ "$mode" = all ]; then
+  while IFS= read -r -d '' f; do files+=("$f"); done < <(git ls-files -z)
+else
+  while IFS= read -r -d '' f; do files+=("$f"); done \
+    < <(git diff --cached --name-only --diff-filter=ACMRT -z)
+fi
+if [ "${#files[@]}" -eq 0 ]; then
+  finish
+fi
+
+# --- 2. Real data under data/ (no R needed) (WORKSPACE.md §3) ---
+blocked=()
+for f in "${files[@]}"; do
+  case "$f" in
+    data/README.md | data/.gitkeep | data/*/.gitkeep) ;;
+    data/*) blocked+=("$f") ;;
+  esac
+done
+if [ "${#blocked[@]}" -gt 0 ]; then
+  ng "Real data under data/ is in Git:"
+  printf '        %s\n' "${blocked[@]}" >&2
+  echo "        The data itself is not tracked. Files passed to the inputs of repro_run() keep their SHA-256 in the run record" >&2
+  echo "        (outputs/repro/<run_id>/<run_id>_run.json). To stop tracking (your local files are not deleted):" >&2
+  printf '          git rm --cached' >&2
+  printf " '%s'" "${blocked[@]}" >&2
+  printf '\n' >&2
+fi
+
+# --- 3. Outputs under outputs/ and models/ (no R needed) (WORKSPACE.md §3) ---
+produced=()
+for f in "${files[@]}"; do
+  case "$f" in
+    outputs/.gitkeep | outputs/*/.gitkeep | models/.gitkeep) ;;
+    outputs/* | models/*) produced+=("$f") ;;
+  esac
+done
+if [ "${#produced[@]}" -gt 0 ]; then
+  ng "Outputs under outputs/ or models/ are in Git:"
+  printf '        %s\n' "${produced[@]}" >&2
+  echo "        Outputs are not tracked. Files put in state\$artifacts keep their SHA-256 in the run record. To stop tracking (your local files are not deleted):" >&2
+  printf '          git rm --cached' >&2
+  printf " '%s'" "${produced[@]}" >&2
+  printf '\n' >&2
+fi
+
+# --- 4. .env files that hold secrets (no R needed) (WORKSPACE.md §3) ---
+env_files=()
+for f in "${files[@]}"; do
+  case "${f##*/}" in
+    .env.example) ;;
+    .env | .env.* | *.env) env_files+=("$f") ;;
+  esac
+done
+if [ "${#env_files[@]}" -gt 0 ]; then
+  ng "A file that holds secrets (.env) is in Git:"
+  printf '        %s\n' "${env_files[@]}" >&2
+  echo "        .env is not tracked by Git (the example file is .env.example). To stop tracking (your local files are not deleted):" >&2
+  printf '          git rm --cached' >&2
+  printf " '%s'" "${env_files[@]}" >&2
+  printf '\n' >&2
+  echo "        If already pushed, treat the tokens and passwords in it as leaked and revoke them." >&2
+fi
+
+# --- 5. Files in data formats outside data/ (no R needed) (WORKSPACE.md §3) ---
+data_extensions=" csv csv2 csvy tsv psv dat dif fwf rec mtp syd arff dbf dump xlsx xls xlsm xlsb xltx xltm ods fods numbers jmp sas7bdat xpt sav zsav por dta rds rda rdata qs2 fst feather parquet arrow pzfx mat wf1 pkl pickle joblib npy npz h5 hdf5 sqlite sqlite3 db accdb mdb zip gz gzip bz2 bzip2 tar tgz tbz2 "
+outside=()
+for f in "${files[@]}"; do
+  case "$f" in data/* | outputs/* | models/* | docs/definition/* | configs/* | tests/testthat/*) continue ;; esac
+  name="${f##*/}"
+  case "$name" in *.*) ;; *) continue ;; esac
+  extension="$(printf '%s' "${name##*.}" | tr '[:upper:]' '[:lower:]')"
+  case "$data_extensions" in *" ${extension} "*) outside+=("$f") ;; esac
+done
+if [ "${#outside[@]}" -gt 0 ]; then
+  ng "There are files in data formats outside data/ (they are allowed only in docs/definition/, configs/ and tests/testthat/):"
+  printf '        %s\n' "${outside[@]}" >&2
+  echo "        Data goes in data/ (not tracked by Git). To stop tracking (your local files are not deleted):" >&2
+  printf '          git rm --cached' >&2
+  printf " '%s'" "${outside[@]}" >&2
+  printf '\n' >&2
+fi
+
+# --- 6. Files that .gitignore excludes but were added with git add -f (no R needed) (WORKSPACE.md §3) ---
+forced=()
+while IFS= read -r -d '' f; do
+  case "$f" in data/* | outputs/* | models/*) continue ;; esac
+  case "${f##*/}" in .env | .env.* | *.env) continue ;; esac
+  extension="$(printf '%s' "${f##*.}" | tr '[:upper:]' '[:lower:]')"
+  case "$data_extensions" in *" ${extension} "*) continue ;; esac
+  forced+=("$f")
+done < <(printf '%s\0' "${files[@]}" | git -c core.excludesFile=/dev/null check-ignore --no-index --stdin -z)
+if [ "${#forced[@]}" -gt 0 ]; then
+  ng "Files that .gitignore excludes were added to Git with git add -f:"
+  printf '        %s\n' "${forced[@]}" >&2
+  echo "        Rendered documents and figures, R history, keys and so on are not tracked. To stop tracking (your local files are not deleted):" >&2
+  printf '          git rm --cached' >&2
+  printf " '%s'" "${forced[@]}" >&2
+  printf '\n' >&2
+fi
+
+# --- 7. File or folder names that differ only in case (no R needed) (WORKSPACE.md §3) ---
+dup="$(git ls-files -z | tr '\0' '\n' | awk -F/ '{p=$1; print p; for (i=2;i<=NF;i++) {p=p"/"$i; print p}}' | sort -u | tr '[:upper:]' '[:lower:]' | sort | uniq -d)"
+if [ -n "$dup" ]; then
+  ng "There are file or folder names that differ only in case (on macOS and Windows they collide as the same name):"
+  printf '        %s\n' "$dup" >&2
+fi
+
+# --- 8. Conflict markers (only during a merge, rebase, cherry-pick or revert) (no R needed) (WORKSPACE.md §3) ---
+in_conflict=0
+for state in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+  [ -e "$(git rev-parse --git-path "$state")" ] && in_conflict=1
+done
+if [ "$in_conflict" -eq 1 ]; then
+  for f in "${files[@]}"; do
+    if git grep --cached -I -q -E '^(<{7} |={7}$|>{7} )' -- ":(literal)$f"; then
+      ng "$f: conflict markers (<<<<<<< / ======= / >>>>>>>) remain"
+    fi
+  done
+fi
+
+# --- 9. docker-compose.yml whose name is still the template value (notify without stopping; no R needed) (WORKSPACE.md §3) ---
+if [ "$mode" = staged ] && printf '%s\n' "${files[@]}" | grep -x 'docker-compose.yml' >/dev/null; then
+  staged_name="$(git show :docker-compose.yml 2>/dev/null | sed -n 's/^name: \([a-z0-9]*\)$/\1/p')"
+  if [ -n "$staged_name" ]; then
+    printf '\033[31m[pre-commit]\033[0m %s\n' "docker-compose.yml is being committed with name: still set to the template value (${staged_name}) (the commit is not stopped)." >&2
+    echo "        In a project, after make rename, run git add docker-compose.yml and commit again (git commit --amend)." >&2
+  fi
+fi
+
+# --- 10. Write the content to check to a temporary folder ($TMPDIR) (WORKSPACE.md §3) ---
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/precommit.XXXXXX")" || exit 1
+trap 'rm -rf "$tmp"' EXIT
+list="$tmp/files"
+printf '%s\n' "${files[@]}" > "$list"
+if [ "$mode" = all ]; then
+  content_root="$root"
+else
+  content_root="$tmp/index"
+  mkdir -p "$content_root"
+  if ! printf '%s\0' "${files[@]}" | git checkout-index --prefix="$content_root/" -z --stdin; then
+    ng "Could not write out the staged content (git checkout-index failed). Stopping because nothing can be checked."
+    finish
+  fi
+fi
+
+# --- In CI, check with the Rscript at hand (WORKSPACE.md §3) ---
+if [ -n "${CI:-}" ]; then
+  Rscript --vanilla tools/precommit_checks.R "$content_root" "$root" "$list" || fail=1
+  finish
+fi
+
+# --- Add the places to look for docker to PATH (WORKSPACE.md §3) ---
+PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.docker/bin:/Applications/Docker.app/Contents/Resources/bin"
+# --- Where inside the container to read the written content (WORKSPACE.md §3) ---
+if [ "$mode" = all ]; then
+  app_content=/app
+else
+  app_content=/precommit/index
+fi
+# --- On the host, check with the R in the image (WORKSPACE.md §3) ---
+if ! command -v docker >/dev/null 2>&1; then
+  ng_docker "docker not found. The R checks use the R in the image. Install and start Docker Desktop."
+elif ! docker info >/dev/null 2>&1; then
+  ng_docker "Docker is not running. Start Docker Desktop, then commit again (it is used for the R checks)."
+else
+  image="$(docker compose config --images 2>/dev/null | head -n 1)"
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    ng_docker "The image (${image}) does not exist. Run make build first (it is used for the R checks)."
+  else
+    docker compose --progress quiet run --rm -T --user rstudio -v "${tmp}:/precommit:ro" task \
+      Rscript --vanilla tools/precommit_checks.R "$app_content" /app /precommit/files \
+      || fail=1
+  fi
+fi
+
+# --- Stop the commit if there are problems (WORKSPACE.md §3) ---
+finish

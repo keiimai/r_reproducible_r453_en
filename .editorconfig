@@ -1,0 +1,38 @@
+# --- Editor formatting rules (WORKSPACE.md §1) ---
+
+# --- Do not read .editorconfig files in parent folders (WORKSPACE.md §1) ---
+root = true
+
+# --- Formatting for all files (WORKSPACE.md §1) ---
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# --- Keep trailing whitespace in Markdown (WORKSPACE.md §1) ---
+[*.md]
+trim_trailing_whitespace = false
+
+# --- Keep trailing whitespace in tabular data (WORKSPACE.md §1) ---
+[*.{csv,csv2,csvy,tsv,psv,dat,fwf}]
+trim_trailing_whitespace = false
+
+# --- Indent Makefile and project.mk with tabs (WORKSPACE.md §1) ---
+[{Makefile,project.mk}]
+indent_style = tab
+
+# --- Indent Dockerfile and DESCRIPTION with 4 spaces (WORKSPACE.md §1) ---
+[{Dockerfile,DESCRIPTION}]
+indent_size = 4
+
+# --- Do not apply formatting rules to received data (WORKSPACE.md §1) ---
+[data/**]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+indent_style = unset
+indent_size = unset

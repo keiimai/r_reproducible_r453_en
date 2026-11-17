@@ -1,0 +1,35 @@
+// --- Use the compose dev service directly from VS Code (DOCKER.md §3) ---
+{
+  "name": "${localWorkspaceFolderBasename} (R 4.5.3)",
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "dev",
+  "workspaceFolder": "/app",
+  "overrideCommand": true,
+  "customizations": {
+    "vscode": {
+      // --- Extensions installed in VS Code inside the container (DOCKER.md §3) ---
+      "extensions": [
+        "REditorSupport.r",
+        "quarto.quarto",
+        "redhat.vscode-yaml",
+        "EditorConfig.EditorConfig"
+      ],
+      "settings": {
+        // --- Send multi-line code to the R terminal as one block (DOCKER.md §3) ---
+        "r.bracketedPaste": true,
+        // --- Do not use the language server or session watcher (the packages they need are not in the image) (DOCKER.md §3) ---
+        "r.lsp.enabled": false,
+        "r.sessionWatcher": false,
+        // --- The YAML extension does not send usage data (DOCKER.md §3) ---
+        "redhat.telemetry.enabled": false,
+        // --- Do not use VS Code's git inside the container (DOCKER.md §3) ---
+        "git.enabled": false,
+        // --- Exclude from search: tracked but large files (DOCKER.md §3) ---
+        "search.exclude": {
+          "renv.lock": true
+        }
+      }
+    }
+  },
+  "remoteUser": "rstudio"
+}

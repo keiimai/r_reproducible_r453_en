@@ -1,0 +1,55 @@
+# --- Starting the development environment (DOCKER.md §1) ---
+
+# --- Name. The image and container names are also built from it (DOCKER.md §3) ---
+name: r453en
+
+services:
+  dev:
+    # --- Image and container names (built from name:; the image is never pulled from Docker Hub) (DOCKER.md §3) ---
+    image: ${COMPOSE_PROJECT_NAME}:dev
+    pull_policy: never
+    container_name: ${COMPOSE_PROJECT_NAME}_dev
+
+    # --- CPU type (default linux/arm64 for Apple Silicon; change it with PLATFORM in .env) (DOCKER.md §1) ---
+    platform: ${PLATFORM:-linux/arm64}
+
+    # --- Do not create a per-project network; connect to Docker's default bridge (DOCKER.md §3) ---
+    network_mode: bridge
+
+    # --- The repository itself (DOCKER.md §2) ---
+    volumes:
+      - .:/app
+
+    # --- Docker picks the host-side port number (DOCKER.md §3) ---
+    ports:
+      - "127.0.0.1:8787-8886:8787"
+
+    # --- Environment variables (DOCKER.md §3) ---
+    environment:
+      - DISABLE_AUTH=true
+
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
+
+      # --- Container time zone (change with CONTAINER_TZ in .env; default Asia/Tokyo) (DOCKER.md §3) ---
+      - TZ=${CONTAINER_TZ:-Asia/Tokyo}
+
+    # --- Environment variables the project adds (Layers 4–5 extension point; names under environment: above cannot be overridden) (DOCKER.md §3) ---
+    env_file: docker/project_env.txt
+
+  # --- Entry point for make's container targets, make shell and the pre-commit hook (same as dev, but the Dev Container does not attach to it) (DOCKER.md §3) ---
+  task:
+    extends:
+      service: dev
+    profiles: ["tools"]
+    container_name: ${COMPOSE_PROJECT_NAME}_task
+
+  # --- Entry point for regenerating renv.lock (make lock) (DOCKER.md §2) ---
+  lock:
+    profiles: ["tools"]
+    image: ${COMPOSE_PROJECT_NAME}:bootstrap
+    platform: ${PLATFORM:-linux/arm64}
+    network_mode: bridge
+    volumes:
+      - .:/app

@@ -1,0 +1,1 @@
+# --- Environment variables the research project passes to the container (Layers 4–5 extension point; one NAME=value per line; no secret values) (DOCKER.md §3) ---
